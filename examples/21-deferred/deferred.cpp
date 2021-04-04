@@ -8,6 +8,10 @@
 #include "imgui/imgui.h"
 #include "camera.h"
 #include "bounds.h"
+#include "bimg/bimg.h"
+#include "bx/file.h"
+
+#include <iostream>
 
 namespace
 {
@@ -18,6 +22,7 @@ constexpr bgfx::ViewId kRenderPassLight        = 2;
 constexpr bgfx::ViewId kRenderPassCombine      = 3;
 constexpr bgfx::ViewId kRenderPassDebugLights  = 4;
 constexpr bgfx::ViewId kRenderPassDebugGBuffer = 5;
+constexpr bgfx::ViewId kRenderPassBlit		   = 6;
 
 static float s_texelHalf = 0.0f;
 
@@ -276,6 +281,9 @@ public:
 		u_lightPosRadius = bgfx::createUniform("u_lightPosRadius", bgfx::UniformType::Vec4);
 		u_lightRgbInnerR = bgfx::createUniform("u_lightRgbInnerR", bgfx::UniformType::Vec4);
 
+		//  Create uniform to hold segmentation and instance IDs
+		u_segmentationInfo = bgfx::createUniform("u_segmentationInfo", bgfx::UniformType::Vec4);
+
 		// Create program from shaders.
 		m_geomProgram    = loadProgram("vs_deferred_geom",       "fs_deferred_geom");
 		m_lightProgram   = loadProgram("vs_deferred_light",      "fs_deferred_light");
@@ -319,6 +327,8 @@ public:
 		m_gbufferTex[0].idx = bgfx::kInvalidHandle;
 		m_gbufferTex[1].idx = bgfx::kInvalidHandle;
 		m_gbufferTex[2].idx = bgfx::kInvalidHandle;
+		m_gbufferTex[3].idx = bgfx::kInvalidHandle;
+		m_gbufferTex[4].idx = bgfx::kInvalidHandle;
 		m_gbuffer.idx       = bgfx::kInvalidHandle;
 		m_lightBuffer.idx   = bgfx::kInvalidHandle;
 
@@ -342,6 +352,11 @@ public:
 		m_animateMesh = true;
 		m_showScissorRects = false;
 		m_showGBuffer = true;
+		m_copyAndSaveImages = false;
+
+		uint32_t size = m_width * m_height * 4;
+		m_hostBuffer = new uint16_t[size];
+		memset(m_hostBuffer, 0, size * sizeof(uint16_t));
 
 		cameraCreate();
 
@@ -368,6 +383,11 @@ public:
 		if (bgfx::isValid(m_lightBufferTex) )
 		{
 			bgfx::destroy(m_lightBufferTex);
+		}
+
+		if (bgfx::isValid(m_depthSegPackedTex))
+		{
+			bgfx::destroy(m_depthSegPackedTex);
 		}
 
 		bgfx::destroy(m_ibh);
@@ -404,6 +424,10 @@ public:
 		bgfx::destroy(u_lightPosRadius);
 		bgfx::destroy(u_lightRgbInnerR);
 		bgfx::destroy(u_mtx);
+
+		if (m_hostBuffer != nullptr) {
+			delete[] m_hostBuffer;
+		}
 
 		// Shutdown bgfx.
 		bgfx::shutdown();
@@ -449,6 +473,7 @@ public:
 			ImGui::SliderInt("Num lights", &m_numLights, 1, 2048);
 			ImGui::Checkbox("Show G-Buffer.", &m_showGBuffer);
 			ImGui::Checkbox("Show light scissor.", &m_showScissorRects);
+			ImGui::Checkbox("Copy & Save images.", &m_copyAndSaveImages);
 
 			if (bgfx::isValid(m_lightTaProgram))
 			{
@@ -509,6 +534,8 @@ public:
 						m_gbufferTex[0].idx = bgfx::kInvalidHandle;
 						m_gbufferTex[1].idx = bgfx::kInvalidHandle;
 						m_gbufferTex[2].idx = bgfx::kInvalidHandle;
+						m_gbufferTex[3].idx = bgfx::kInvalidHandle;
+						m_gbufferTex[4].idx = bgfx::kInvalidHandle;
 					}
 
 					const uint64_t tsFlags = 0
@@ -519,7 +546,7 @@ public:
 						| BGFX_SAMPLER_V_CLAMP
 						;
 
-					bgfx::Attachment gbufferAt[3];
+					bgfx::Attachment gbufferAt[5];
 
 					if (m_useTArray)
 					{
@@ -535,14 +562,26 @@ public:
 						gbufferAt[1].init(m_gbufferTex[1]);
 					}
 
+					// RT packed for cpu copy
+					m_gbufferTex[2] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA16, BGFX_TEXTURE_RT | tsFlags);
+					gbufferAt[2].init(m_gbufferTex[2]);
+
+					// cpu-readable buffer
+					m_depthSegPackedTex = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA16, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST | tsFlags);
+
+					// for debug viz
+					m_gbufferTex[3] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::R8,  BGFX_TEXTURE_RT | tsFlags);
+					gbufferAt[3].init(m_gbufferTex[3]);
+
+					// depth attachment
 					bgfx::TextureFormat::Enum depthFormat =
-						  bgfx::isTextureValid(0, false, 1, bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT | tsFlags)
+						bgfx::isTextureValid(0, false, 1, bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT | tsFlags)
 						? bgfx::TextureFormat::D32F
 						: bgfx::TextureFormat::D24
 						;
 
-					m_gbufferTex[2] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, depthFormat, BGFX_TEXTURE_RT | tsFlags);
-					gbufferAt[2].init(m_gbufferTex[2]);
+					m_gbufferTex[4] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, depthFormat, BGFX_TEXTURE_RT | tsFlags);
+					gbufferAt[4].init(m_gbufferTex[4]);
 
 					m_gbuffer = bgfx::createFrameBuffer(BX_COUNTOF(gbufferAt), gbufferAt, true);
 
@@ -641,6 +680,8 @@ public:
 						mtx[13] = -offset + float(yy)*3.0f;
 						mtx[14] = 0.0f;
 
+						float seg_inst[4] = { 15.f, 1.f, 0.f, 0.f };
+
 						// Set transform for draw call.
 						bgfx::setTransform(mtx);
 
@@ -651,6 +692,8 @@ public:
 						// Bind textures.
 						bgfx::setTexture(0, s_texColor,  m_textureColor);
 						bgfx::setTexture(1, s_texNormal, m_textureNormal);
+
+						bgfx::setUniform(u_segmentationInfo, &seg_inst);
 
 						// Set render states.
 						bgfx::setState(0
@@ -790,7 +833,7 @@ public:
 						const uint16_t scissorHeight = uint16_t(y1-y0);
 						bgfx::setScissor(uint16_t(x0), uint16_t(m_height-scissorHeight-y0), uint16_t(x1-x0), uint16_t(scissorHeight) );
 						bgfx::setTexture(0, s_normal, bgfx::getTexture(m_gbuffer, 1) );
-						bgfx::setTexture(1, s_depth,  bgfx::getTexture(m_gbuffer, 2) );
+						bgfx::setTexture(1, s_depth,  bgfx::getTexture(m_gbuffer, 4) );
 						bgfx::setState(0
 							| BGFX_STATE_WRITE_RGB
 							| BGFX_STATE_WRITE_A
@@ -850,13 +893,90 @@ public:
 						bgfx::submit(kRenderPassDebugGBuffer, m_debugProgram);
 					}
 				}
+
+				if (m_copyAndSaveImages) {
+					if (!m_copyInProgress) {
+						bgfx::blit(kRenderPassBlit, m_depthSegPackedTex, 0, 0, m_gbufferTex[2]);
+						m_frameAvailable = bgfx::readTexture(m_depthSegPackedTex, m_hostBuffer);
+						m_copyInProgress = true;
+					}
+
+					if (m_copyInProgress && m_frameNumber >= m_frameAvailable) {
+						uint32_t size = m_width * m_height * 4;
+						uint8_t* depth_dst = new uint8_t[size];
+						uint8_t* seg_dst = new uint8_t[m_width * m_height];
+						uint8_t* inst_dst = new uint8_t[m_width * m_height];
+
+						for (uint32_t src = 0, dst = 0; src < size; src = src + 4, dst = dst + 4) {
+							uint16_t depth = m_hostBuffer[src];
+							uint16_t* tmp = (uint16_t*)(&depth_dst[dst]);
+							*tmp = depth;
+							depth_dst[dst + 2] = 0;
+							depth_dst[dst + 3] = 255;
+						}
+						for (uint32_t src = 0, dst = 0; src < size; src = src + 4, dst++) {
+							seg_dst[dst] = static_cast<uint8_t>(m_hostBuffer[src + 1]);
+							inst_dst[dst] = static_cast<uint8_t>(m_hostBuffer[src + 2]);
+							// src + 3 is empty
+						}
+
+						bx::FileWriter writer;
+						bx::Error err;
+						if (bx::open(&writer, "depth_test.png", false, &err))
+						{
+							bimg::imageWritePng(&writer
+								, m_width
+								, m_height
+								, m_width * 4
+								, (void*)depth_dst
+								, bimg::TextureFormat::RGBA8  // R16 is not supported
+								, false
+								, &err
+							);
+							bx::close(&writer);
+						}
+						if (bx::open(&writer, "seg_test.png", false, &err))
+						{
+							bimg::imageWritePng(&writer
+								, m_width
+								, m_height
+								, m_width
+								, (void*)seg_dst
+								, bimg::TextureFormat::R8
+								, false
+								, &err
+							);
+							bx::close(&writer);
+						}
+						if (bx::open(&writer, "inst_test.png", false, &err))
+						{
+							bimg::imageWritePng(&writer
+								, m_width
+								, m_height
+								, m_width
+								, (void*)inst_dst
+								, bimg::TextureFormat::R8
+								, false
+								, &err
+							);
+							bx::close(&writer);
+						}
+
+						delete[] depth_dst;
+						delete[] seg_dst;
+						delete[] inst_dst;
+
+						m_frameAvailable = UINT32_MAX;
+						m_copyInProgress = false;
+					}
+				}
 			}
 
 			imguiEndFrame();
 
 			// Advance to next frame. Rendering thread will be kicked to
 			// process submitted rendering primitives.
-			bgfx::frame();
+			m_frameNumber = bgfx::frame();
 
 			return true;
 		}
@@ -878,6 +998,8 @@ public:
 	bgfx::UniformHandle u_lightPosRadius;
 	bgfx::UniformHandle u_lightRgbInnerR;
 
+	bgfx::UniformHandle u_segmentationInfo;
+
 	bgfx::ProgramHandle m_geomProgram;
 	bgfx::ProgramHandle m_lightProgram;
 	bgfx::ProgramHandle m_lightTaProgram;
@@ -889,8 +1011,9 @@ public:
 	bgfx::TextureHandle m_textureColor;
 	bgfx::TextureHandle m_textureNormal;
 
-	bgfx::TextureHandle m_gbufferTex[3];
+	bgfx::TextureHandle m_gbufferTex[5];
 	bgfx::TextureHandle m_lightBufferTex;
+	bgfx::TextureHandle m_depthSegPackedTex;
 	bgfx::FrameBufferHandle m_gbuffer;
 	bgfx::FrameBufferHandle m_lightBuffer;
 
@@ -915,11 +1038,16 @@ public:
 	bool m_animateMesh;
 	bool m_showScissorRects;
 	bool m_showGBuffer;
+	bool m_copyAndSaveImages;
+	bool m_copyInProgress = false;
+	uint32_t m_frameAvailable = UINT32_MAX;
+	uint16_t* m_hostBuffer = nullptr;
 
 	entry::MouseState m_mouseState;
 
 	const bgfx::Caps* m_caps;
 	int64_t m_timeOffset;
+	uint32_t m_frameNumber = 0;
 };
 
 } // namespace

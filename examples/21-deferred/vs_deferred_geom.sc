@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_tangent, a_texcoord0
-$output v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0
+$output v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0, v_seg_depth
 
 /*
  * Copyright 2011-2021 Branimir Karadzic. All rights reserved.
@@ -7,6 +7,8 @@ $output v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0
  */
 
 #include "../common/common.sh"
+
+uniform vec4 u_segmentationInfo[1];
 
 void main()
 {
@@ -34,4 +36,6 @@ void main()
 	v_bitangent = viewBitangent;
 
 	v_texcoord0 = a_texcoord0;
+
+	v_seg_depth = vec3(gl_Position.z / gl_Position.w, u_segmentationInfo[0].x, u_segmentationInfo[0].y);
 }
