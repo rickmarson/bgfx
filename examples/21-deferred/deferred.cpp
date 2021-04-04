@@ -546,7 +546,7 @@ public:
 						| BGFX_SAMPLER_V_CLAMP
 						;
 
-					bgfx::Attachment gbufferAt[5];
+					bgfx::Attachment gbufferAt[6];
 
 					if (m_useTArray)
 					{
@@ -570,8 +570,11 @@ public:
 					m_depthSegPackedTex = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA16, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST | tsFlags);
 
 					// for debug viz
-					m_gbufferTex[3] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::R8,  BGFX_TEXTURE_RT | tsFlags);
+					m_gbufferTex[3] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGB8,  BGFX_TEXTURE_RT | tsFlags);
 					gbufferAt[3].init(m_gbufferTex[3]);
+
+					m_gbufferTex[4] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGB8, BGFX_TEXTURE_RT | tsFlags);
+					gbufferAt[4].init(m_gbufferTex[4]);
 
 					// depth attachment
 					bgfx::TextureFormat::Enum depthFormat =
@@ -580,8 +583,8 @@ public:
 						: bgfx::TextureFormat::D24
 						;
 
-					m_gbufferTex[4] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, depthFormat, BGFX_TEXTURE_RT | tsFlags);
-					gbufferAt[4].init(m_gbufferTex[4]);
+					m_gbufferTex[5] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, depthFormat, BGFX_TEXTURE_RT | tsFlags);
+					gbufferAt[5].init(m_gbufferTex[5]);
 
 					m_gbuffer = bgfx::createFrameBuffer(BX_COUNTOF(gbufferAt), gbufferAt, true);
 
@@ -678,7 +681,7 @@ public:
 						}
 						mtx[12] = -offset + float(xx)*3.0f;
 						mtx[13] = -offset + float(yy)*3.0f;
-						mtx[14] = 0.0f;
+						mtx[14] = 0.f;
 
 						float seg_inst[4] = { 15.f, 1.f, 0.f, 0.f };
 
@@ -833,7 +836,7 @@ public:
 						const uint16_t scissorHeight = uint16_t(y1-y0);
 						bgfx::setScissor(uint16_t(x0), uint16_t(m_height-scissorHeight-y0), uint16_t(x1-x0), uint16_t(scissorHeight) );
 						bgfx::setTexture(0, s_normal, bgfx::getTexture(m_gbuffer, 1) );
-						bgfx::setTexture(1, s_depth,  bgfx::getTexture(m_gbuffer, 4) );
+						bgfx::setTexture(1, s_depth,  bgfx::getTexture(m_gbuffer, 5) );
 						bgfx::setState(0
 							| BGFX_STATE_WRITE_RGB
 							| BGFX_STATE_WRITE_A
@@ -876,13 +879,16 @@ public:
 					const float aspectRatio = float(m_width)/float(m_height);
 
 					// Draw m_debug m_gbuffer.
-					for (uint32_t ii = 0; ii < BX_COUNTOF(m_gbufferTex); ++ii)
+					for (uint32_t ii = 0; ii < BX_COUNTOF(m_gbufferTex) - 1; ++ii)
 					{
+						if (ii == 2) continue;
+
+						uint32_t jj = ii < 2 ? ii : ii - 1;
 						float mtx[16];
 						bx::mtxSRT(mtx
 							, aspectRatio, 1.0f, 1.0f
 							, 0.0f, 0.0f, 0.0f
-							, -7.9f - BX_COUNTOF(m_gbufferTex)*0.1f*0.5f + ii*2.1f*aspectRatio, 4.0f, 0.0f
+							, -7.9f - BX_COUNTOF(m_gbufferTex)*0.1f*0.5f + jj*2.1f*aspectRatio, 4.0f, 0.0f
 							);
 
 						bgfx::setTransform(mtx);
@@ -904,20 +910,45 @@ public:
 					if (m_copyInProgress && m_frameNumber >= m_frameAvailable) {
 						uint32_t size = m_width * m_height * 4;
 						uint8_t* depth_dst = new uint8_t[size];
-						uint8_t* seg_dst = new uint8_t[m_width * m_height];
-						uint8_t* inst_dst = new uint8_t[m_width * m_height];
+						uint8_t* seg_dst = new uint8_t[size];
+						uint8_t* inst_dst = new uint8_t[size];
 
 						for (uint32_t src = 0, dst = 0; src < size; src = src + 4, dst = dst + 4) {
 							uint16_t depth = m_hostBuffer[src];
-							uint16_t* tmp = (uint16_t*)(&depth_dst[dst]);
-							*tmp = depth;
-							depth_dst[dst + 2] = 0;
+							float depth_f = depth / 65535.f;
+							depth_dst[dst] = static_cast<uint8_t>(depth_f * 255.0);
+							depth_dst[dst + 1] = static_cast<uint8_t>(depth_f * 255.0);
+							depth_dst[dst + 2] = static_cast<uint8_t>(depth_f * 255.0);
 							depth_dst[dst + 3] = 255;
-						}
-						for (uint32_t src = 0, dst = 0; src < size; src = src + 4, dst++) {
-							seg_dst[dst] = static_cast<uint8_t>(m_hostBuffer[src + 1]);
-							inst_dst[dst] = static_cast<uint8_t>(m_hostBuffer[src + 2]);
-							// src + 3 is empty
+
+							uint8_t seg_id = static_cast<uint8_t>(m_hostBuffer[src + 1]);
+							if (seg_id == 15) {
+								seg_dst[dst] = 50;
+								seg_dst[dst + 1] = 128;
+								seg_dst[dst + 2] = 0;
+								seg_dst[dst + 3] = 255;
+							}
+							else {
+								seg_dst[dst] = 0;
+								seg_dst[dst + 1] = 0;
+								seg_dst[dst + 2] = 0;
+								seg_dst[dst + 3] = 0;
+							}
+
+							uint8_t inst_id = static_cast<uint8_t>(m_hostBuffer[src + 2]);
+							if (inst_id >= 1) {
+								inst_dst[dst] = 255 - inst_id;
+								inst_dst[dst + 1] = 255 - inst_id;
+								inst_dst[dst + 2] = 255 - inst_id;
+								inst_dst[dst + 3] = 255;
+							}
+							else {
+								inst_dst[dst] = 0;
+								inst_dst[dst + 1] = 0;
+								inst_dst[dst + 2] = 0;
+								inst_dst[dst + 3] = 0;
+							}
+
 						}
 
 						bx::FileWriter writer;
@@ -940,9 +971,9 @@ public:
 							bimg::imageWritePng(&writer
 								, m_width
 								, m_height
-								, m_width
+								, m_width * 4
 								, (void*)seg_dst
-								, bimg::TextureFormat::R8
+								, bimg::TextureFormat::RGBA8
 								, false
 								, &err
 							);
@@ -953,9 +984,9 @@ public:
 							bimg::imageWritePng(&writer
 								, m_width
 								, m_height
-								, m_width
+								, m_width * 4
 								, (void*)inst_dst
-								, bimg::TextureFormat::R8
+								, bimg::TextureFormat::RGBA8
 								, false
 								, &err
 							);
@@ -1011,7 +1042,7 @@ public:
 	bgfx::TextureHandle m_textureColor;
 	bgfx::TextureHandle m_textureNormal;
 
-	bgfx::TextureHandle m_gbufferTex[5];
+	bgfx::TextureHandle m_gbufferTex[6];
 	bgfx::TextureHandle m_lightBufferTex;
 	bgfx::TextureHandle m_depthSegPackedTex;
 	bgfx::FrameBufferHandle m_gbuffer;

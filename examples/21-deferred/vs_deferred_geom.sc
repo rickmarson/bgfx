@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_tangent, a_texcoord0
-$output v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0, v_seg_depth
+$output v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0, v_seg_inst
 
 /*
  * Copyright 2011-2021 Branimir Karadzic. All rights reserved.
@@ -37,5 +37,5 @@ void main()
 
 	v_texcoord0 = a_texcoord0;
 
-	v_seg_depth = vec3(gl_Position.z / gl_Position.w, u_segmentationInfo[0].x, u_segmentationInfo[0].y);
+	v_seg_inst = vec3(u_segmentationInfo[0].x, u_segmentationInfo[0].y, 0.0);
 }

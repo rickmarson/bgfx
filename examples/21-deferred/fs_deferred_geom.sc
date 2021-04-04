@@ -1,4 +1,4 @@
-$input v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0, v_seg_depth
+$input v_wpos, v_view, v_normal, v_tangent, v_bitangent, v_texcoord0, v_seg_inst
 
 /*
  * Copyright 2011-2021 Branimir Karadzic. All rights reserved.
@@ -26,13 +26,15 @@ void main()
 
 	vec3 wnormal = normalize(mul(u_invView, vec4(normal, 0.0) ).xyz);
 
-	float depth = clamp((v_seg_depth.x + 1.0) * 0.5, 0.0, 1.0);
-	depth = clamp(depth * 100.0, 0.25, 100.0);
-	depth = (1.0 / depth) * 0.25;
-	depth = floor(clamp(depth, 0.0, 1.0) * 65535.0) - 5.0;
-
+	float z_n = 0.1;
+	float z_f = 100.0;
+	float depth = (2.0 * z_n) / (z_f + z_n - gl_FragCoord.z * (z_f - z_n));
+	depth = (1.0 / depth) * 0.1;  // inverse depth
+	depth = clamp(depth - 7.63e-5, 0.0, 1.0);
+	
 	gl_FragData[0] = texture2D(s_texColor, v_texcoord0);
 	gl_FragData[1] = vec4(encodeNormalUint(wnormal), 1.0);
-	gl_FragData[2] = vec4(depth / 65535.0, v_seg_depth.y / 65535.0, v_seg_depth.z / 65535.0, 1.0);  // packed values for cpu copy
-	gl_FragData[3] = vec4(v_seg_depth.y / 255.0, 0.0, 0.0, 0.0);  // seg debug viz
+	gl_FragData[2] = vec4(depth, v_seg_inst.x / 65535.0, v_seg_inst.y / 65535.0, 1.0);  // packed values for cpu copy
+	gl_FragData[3] = vec4(depth, depth, depth, 1.0);  // depth debug viz
+	gl_FragData[4] = vec4(0.0, v_seg_inst.x * 5.0 / 255.0, 0.0, 1.0);  // seg debug viz
 }
