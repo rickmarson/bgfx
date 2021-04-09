@@ -570,10 +570,10 @@ public:
 					m_depthSegPackedTex = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA16, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST | tsFlags);
 
 					// for debug viz
-					m_gbufferTex[3] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGB8,  BGFX_TEXTURE_RT | tsFlags);
+					m_gbufferTex[3] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA8,  BGFX_TEXTURE_RT | tsFlags);
 					gbufferAt[3].init(m_gbufferTex[3]);
 
-					m_gbufferTex[4] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGB8, BGFX_TEXTURE_RT | tsFlags);
+					m_gbufferTex[4] = bgfx::createTexture2D(uint16_t(m_width), uint16_t(m_height), false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT | tsFlags);
 					gbufferAt[4].init(m_gbufferTex[4]);
 
 					// depth attachment
