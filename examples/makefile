@@ -85,6 +85,7 @@ rebuild:
 	@make -s --no-print-directory rebuild -C 43-denoise
 	@make -s --no-print-directory rebuild -C 44-sss
 	@make -s --no-print-directory rebuild -C 45-bokeh
+#	@make -s --no-print-directory rebuild -C 46-gpuparticles
 
 rebuild-embedded:
 	@make -s --no-print-directory rebuild -C 02-metaballs
